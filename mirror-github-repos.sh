@@ -6,7 +6,7 @@ usage() {
 Mirror all repositories for a GitHub account.
 
 Usage:
-  mirror-github-repos.sh --account ACCOUNT [--dest DIR] [--token TOKEN] [--token-file FILE] [--dry-run] [--skip-forks] [--with-lfs]
+  mirror-github-repos.sh --account ACCOUNT [--dest DIR] [--token TOKEN] [--token-file FILE] [--dry-run] [--skip-forks] [--repo-regex REGEX] [--with-lfs]
 
 Options:
   -a, --account ACCOUNT   GitHub user or organization name (required)
@@ -15,6 +15,7 @@ Options:
   -T, --token-file FILE   Read GitHub token from file (first line)
   -n, --dry-run           Print planned actions without cloning/fetching
   -s, --skip-forks        Skip repositories where "fork" is true
+  -r, --repo-regex REGEX  Only process repositories whose name matches REGEX
   -l, --with-lfs          Fetch Git LFS objects with --all after mirror/update
   -h, --help              Show this help
 
@@ -259,6 +260,7 @@ TOKEN="${GITHUB_TOKEN:-}"
 TOKEN_FILE=""
 DRY_RUN="0"
 SKIP_FORKS="0"
+REPO_REGEX=""
 WITH_LFS="0"
 
 while [[ $# -gt 0 ]]; do
@@ -291,6 +293,11 @@ while [[ $# -gt 0 ]]; do
       SKIP_FORKS="1"
       shift
       ;;
+    -r|--repo-regex)
+      [[ $# -lt 2 ]] && err "Missing value for $1"
+      REPO_REGEX="$2"
+      shift 2
+      ;;
     -l|--with-lfs)
       WITH_LFS="1"
       shift
@@ -309,6 +316,15 @@ if [[ -n "$TOKEN_FILE" ]]; then
   [[ ! -r "$TOKEN_FILE" ]] && err "Token file is not readable: ${TOKEN_FILE}"
   TOKEN="$(head -n1 "$TOKEN_FILE" | tr -d '\r\n')"
   [[ -z "$TOKEN" ]] && err "Token file is empty: ${TOKEN_FILE}"
+fi
+
+if [[ -n "$REPO_REGEX" ]]; then
+  if [[ ! "" =~ $REPO_REGEX ]]; then
+    regex_status=$?
+    if [[ "$regex_status" -eq 2 ]]; then
+      err "Invalid regular expression for --repo-regex: ${REPO_REGEX}"
+    fi
+  fi
 fi
 
 [[ -z "$ACCOUNT" ]] && {
@@ -356,9 +372,16 @@ filtered_skip_count=0
 for row in "${repo_rows[@]}"; do
   full_name="${row%%$'\t'*}"
   is_fork="${row##*$'\t'}"
+  repo_name="${full_name##*/}"
 
   if [[ "$SKIP_FORKS" == "1" && "$is_fork" == "true" ]]; then
     echo "Skipping fork ${full_name}"
+    ((filtered_skip_count+=1))
+    continue
+  fi
+
+  if [[ -n "$REPO_REGEX" && ! "$repo_name" =~ $REPO_REGEX ]]; then
+    echo "Skipping non-matching repo ${full_name}"
     ((filtered_skip_count+=1))
     continue
   fi
@@ -422,6 +445,6 @@ echo "  failed: ${failed_count}"
 if [[ "$failed_count" -gt 0 ]]; then
   echo "Done with ${failed_count} failed repositories"
   exit 1
-  fi
+fi
 
 echo "Done"

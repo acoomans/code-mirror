@@ -34,6 +34,7 @@ Options:
 - `-T, --token-file FILE` read GitHub token from first line of file
 - `-n, --dry-run` show planned operations without cloning/fetching
 - `-s, --skip-forks` skip repositories where `fork=true`
+- `-r, --repo-regex REGEX` only process repositories whose name matches the regex
 - `-l, --with-lfs` fetch all Git LFS objects after mirror/update
 - `-h, --help` show help
 
@@ -71,6 +72,12 @@ Skip forked repositories:
 
 ```bash
 ./mirror-github-repos.sh --account your-account --token-file .secrets/github-token --skip-forks
+```
+
+Only mirror repositories matching a regex (name only):
+
+```bash
+./mirror-github-repos.sh --account your-account --token-file .secrets/github-token --repo-regex '^(llvm|clang|lldb)$'
 ```
 
 Mirror and fetch LFS objects:

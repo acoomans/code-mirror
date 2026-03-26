@@ -1,6 +1,7 @@
-# GitHub Mirror Script
+# Code Mirror Scripts
 
-`mirror-github-repos.sh` mirrors all repositories for a GitHub account into local bare repositories (`*.git`).
+Mirrors all repositories for a GitHub account or a Bitbucket workspace into local bare repositories (`*.git`).
+
 
 It supports:
 - creating new mirrors
@@ -12,6 +13,12 @@ It supports:
 - `curl` with `wget` fallback for API calls
 - continue-on-error behavior (one repo failure does not stop the whole run)
 - end-of-run summary counters
+
+Provider-specific notes:
+- GitHub script supports `--account` and token auth via GitHub token.
+- Bitbucket script supports `--account`/`--workspace`, and token auth using API tokens (`--username` + `--token`).
+- For Bitbucket token auth, use explicit `ACCOUNT`/`WORKSPACE` plus `BITBUCKET_EMAIL` and `BITBUCKET_TOKEN`.
+- For Bitbucket git clone/fetch with API tokens, the script automatically uses a git-safe auth username when `BITBUCKET_EMAIL` is used for API calls.
 
 ## Requirements
 
@@ -25,6 +32,7 @@ The script intentionally avoids external JSON tooling (no `jq`) and uses portabl
 
 ```bash
 ./mirror-github-repos.sh --account ACCOUNT [options]
+./mirror-bitbucket-repos.sh --account WORKSPACE [options]
 ```
 
 Options:
@@ -55,6 +63,24 @@ Run with:
 
 ```bash
 ./mirror-github-repos.sh --token-file .secrets/github.env
+```
+
+Bitbucket credential file example:
+
+```bash
+mkdir -p .secrets
+cat > .secrets/bitbucket.env <<'EOF'
+WORKSPACE=your-workspace
+BITBUCKET_EMAIL=you@example.com
+BITBUCKET_TOKEN=YOUR_API_TOKEN
+EOF
+chmod 600 .secrets/bitbucket.env
+```
+
+Run with:
+
+```bash
+./mirror-bitbucket-repos.sh --token-file .secrets/bitbucket.env
 ```
 
 Notes:
@@ -91,6 +117,12 @@ Mirror and fetch LFS objects:
 
 ```bash
 ./mirror-github-repos.sh --account your-account --token-file .secrets/github.env --with-lfs
+```
+
+Bitbucket dry-run with regex and fork skipping:
+
+```bash
+./mirror-bitbucket-repos.sh --workspace your-workspace --token-file .secrets/bitbucket.env --skip-forks --repo-regex '^(my-repo)$' --dry-run
 ```
 
 ## Behavior Notes

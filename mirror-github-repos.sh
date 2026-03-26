@@ -176,11 +176,13 @@ clone_or_update_repo() {
   if [[ -d "$repo_path" ]]; then
     if [[ ! -f "$repo_path/HEAD" ]]; then
       echo "Skipping ${full_name}: ${repo_path} exists but does not look like a git mirror"
+      LAST_ACTION="skipped"
       return 0
     fi
 
     if [[ "$DRY_RUN" == "1" ]]; then
       echo "[dry-run] update ${full_name} -> ${repo_path}"
+      LAST_ACTION="planned_update"
       return 0
     fi
 
@@ -196,9 +198,12 @@ clone_or_update_repo() {
         return 1
       fi
     fi
+
+    LAST_ACTION="updated"
   else
     if [[ "$DRY_RUN" == "1" ]]; then
       echo "[dry-run] mirror ${full_name} -> ${repo_path}"
+      LAST_ACTION="planned_mirror"
       return 0
     fi
 
@@ -212,6 +217,8 @@ clone_or_update_repo() {
       echo "Failed to set clean origin URL for ${full_name}" >&2
       return 1
     fi
+
+    LAST_ACTION="mirrored"
   fi
 }
 
@@ -303,12 +310,14 @@ fi
 echo "Found ${#repo_rows[@]} repositories"
 
 repos=()
+filtered_skip_count=0
 for row in "${repo_rows[@]}"; do
   full_name="${row%%$'\t'*}"
   is_fork="${row##*$'\t'}"
 
   if [[ "$SKIP_FORKS" == "1" && "$is_fork" == "true" ]]; then
     echo "Skipping fork ${full_name}"
+    ((filtered_skip_count+=1))
     continue
   fi
 
@@ -323,16 +332,54 @@ fi
 echo "Processing ${#repos[@]} repositories"
 
 failed_count=0
+mirrored_count=0
+updated_count=0
+skipped_count="$filtered_skip_count"
+planned_mirror_count=0
+planned_update_count=0
 for full_name in "${repos[@]}"; do
   if ! clone_or_update_repo "$full_name" "$DEST_DIR"; then
-    ((failed_count++))
+    ((failed_count+=1))
     echo "Failed ${full_name}; continuing"
+    continue
   fi
+
+  case "$LAST_ACTION" in
+    mirrored)
+      ((mirrored_count+=1))
+      ;;
+    updated)
+      ((updated_count+=1))
+      ;;
+    skipped)
+      ((skipped_count+=1))
+      ;;
+    planned_mirror)
+      ((planned_mirror_count+=1))
+      ;;
+    planned_update)
+      ((planned_update_count+=1))
+      ;;
+    *)
+      ;;
+  esac
 done
+
+echo "Summary:"
+echo "  selected: ${#repos[@]}"
+echo "  skipped: ${skipped_count}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "  planned_mirror: ${planned_mirror_count}"
+  echo "  planned_update: ${planned_update_count}"
+else
+  echo "  mirrored: ${mirrored_count}"
+  echo "  updated: ${updated_count}"
+fi
+echo "  failed: ${failed_count}"
 
 if [[ "$failed_count" -gt 0 ]]; then
   echo "Done with ${failed_count} failed repositories"
   exit 1
-fi
+  fi
 
 echo "Done"

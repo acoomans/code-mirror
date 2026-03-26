@@ -1,0 +1,17 @@
+{
+	"name": "github-mirror",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"runArgs": [
+		"--name",
+		"github-mirror"
+	],
+	"postCreateCommand": "chmod +x .devcontainer/setup.sh && bash .devcontainer/setup.sh",
+	"customizations": {
+		"vscode": {
+			"extensions": [],
+			"settings": {}
+		}
+	}
+}

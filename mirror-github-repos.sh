@@ -72,7 +72,7 @@ extract_json_string_field() {
     {
       if (match($0, pattern)) {
         rest = substr($0, RSTART + RLENGTH)
-        if (match(rest, /\"/)) {
+        if (match(rest, /"/)) {
           print substr(rest, 1, RSTART - 1)
           exit
         }

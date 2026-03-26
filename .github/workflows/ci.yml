@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Make scripts executable
+        run: chmod +x scripts/lint.sh scripts/smoke-test.sh
+
+      - name: Lint and syntax
+        run: ./scripts/lint.sh
+
+      - name: Smoke test
+        run: ./scripts/smoke-test.sh

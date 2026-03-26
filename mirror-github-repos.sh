@@ -6,12 +6,13 @@ usage() {
 Mirror all repositories for a GitHub account.
 
 Usage:
-  mirror-github-repos.sh --account ACCOUNT [--dest DIR] [--token TOKEN] [--dry-run] [--skip-forks]
+  mirror-github-repos.sh --account ACCOUNT [--dest DIR] [--token TOKEN] [--token-file FILE] [--dry-run] [--skip-forks]
 
 Options:
   -a, --account ACCOUNT   GitHub user or organization name (required)
   -d, --dest DIR          Destination directory for mirrored repos (default: ./mirrors)
   -t, --token TOKEN       GitHub token (or set GITHUB_TOKEN env var)
+  -T, --token-file FILE   Read GitHub token from file (first line)
   -n, --dry-run           Print planned actions without cloning/fetching
   -s, --skip-forks        Skip repositories where "fork" is true
   -h, --help              Show this help
@@ -205,6 +206,7 @@ clone_or_update_repo() {
 ACCOUNT=""
 DEST_DIR="./mirrors"
 TOKEN="${GITHUB_TOKEN:-}"
+TOKEN_FILE=""
 DRY_RUN="0"
 SKIP_FORKS="0"
 
@@ -225,6 +227,11 @@ while [[ $# -gt 0 ]]; do
       TOKEN="$2"
       shift 2
       ;;
+    -T|--token-file)
+      [[ $# -lt 2 ]] && err "Missing value for $1"
+      TOKEN_FILE="$2"
+      shift 2
+      ;;
     -n|--dry-run)
       DRY_RUN="1"
       shift
@@ -242,6 +249,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$TOKEN_FILE" ]]; then
+  [[ ! -r "$TOKEN_FILE" ]] && err "Token file is not readable: ${TOKEN_FILE}"
+  TOKEN="$(head -n1 "$TOKEN_FILE" | tr -d '\r\n')"
+  [[ -z "$TOKEN" ]] && err "Token file is empty: ${TOKEN_FILE}"
+fi
 
 [[ -z "$ACCOUNT" ]] && {
   usage

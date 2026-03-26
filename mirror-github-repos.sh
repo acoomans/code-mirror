@@ -186,9 +186,15 @@ clone_or_update_repo() {
 
     echo "Updating ${full_name}"
     if [[ -n "$TOKEN" ]]; then
-      git -C "$repo_path" fetch --prune "$auth_url" '+refs/*:refs/*'
+      if ! git -C "$repo_path" fetch --prune "$auth_url" '+refs/*:refs/*'; then
+        echo "Update failed for ${full_name}" >&2
+        return 1
+      fi
     else
-      git -C "$repo_path" remote update --prune
+      if ! git -C "$repo_path" remote update --prune; then
+        echo "Update failed for ${full_name}" >&2
+        return 1
+      fi
     fi
   else
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -197,9 +203,15 @@ clone_or_update_repo() {
     fi
 
     echo "Mirroring ${full_name}"
-    git clone --mirror "$auth_url" "$repo_path"
+    if ! git clone --mirror "$auth_url" "$repo_path"; then
+      echo "Mirror failed for ${full_name}" >&2
+      return 1
+    fi
     # Keep origin URL token-free on disk.
-    git -C "$repo_path" remote set-url origin "$clean_url"
+    if ! git -C "$repo_path" remote set-url origin "$clean_url"; then
+      echo "Failed to set clean origin URL for ${full_name}" >&2
+      return 1
+    fi
   fi
 }
 
@@ -310,8 +322,17 @@ fi
 
 echo "Processing ${#repos[@]} repositories"
 
+failed_count=0
 for full_name in "${repos[@]}"; do
-  clone_or_update_repo "$full_name" "$DEST_DIR"
+  if ! clone_or_update_repo "$full_name" "$DEST_DIR"; then
+    ((failed_count++))
+    echo "Failed ${full_name}; continuing"
+  fi
 done
+
+if [[ "$failed_count" -gt 0 ]]; then
+  echo "Done with ${failed_count} failed repositories"
+  exit 1
+fi
 
 echo "Done"

@@ -216,13 +216,19 @@ load_credentials_file() {
   [[ ! -r "$creds_file" ]] && err "Token file is not readable: ${creds_file}"
 
   while IFS= read -r line || [[ -n "$line" ]]; do
-    local trimmed key value
+    local trimmed key key_normalized value
 
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    trimmed="${trimmed%$'\r'}"
 
     [[ -z "$trimmed" ]] && continue
     [[ "${trimmed:0:1}" == "#" ]] && continue
+
+    if [[ "$trimmed" == export[[:space:]]* ]]; then
+      trimmed="${trimmed#export}"
+      trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+    fi
 
     if [[ "$trimmed" != *=* ]]; then
       if [[ -z "$first_plain_value" ]]; then
@@ -238,6 +244,8 @@ load_credentials_file() {
     key="${key%"${key##*[![:space:]]}"}"
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
+    value="${value%$'\r'}"
+    key_normalized="${key^^}"
 
     if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' && ${#value} -ge 2 ]]; then
       value="${value:1:${#value}-2}"
@@ -245,7 +253,7 @@ load_credentials_file() {
       value="${value:1:${#value}-2}"
     fi
 
-    case "$key" in
+    case "$key_normalized" in
       ACCOUNT|GITHUB_ACCOUNT)
         if [[ "$ACCOUNT_SET_BY_ARG" == "0" && -z "$ACCOUNT" ]]; then
           ACCOUNT="$value"
@@ -418,6 +426,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$TOKEN_FILE" ]]; then
+  load_credentials_file "$TOKEN_FILE"
+elif [[ "$TOKEN_SET_BY_ARG" == "1" && -r "$TOKEN" ]]; then
+  # Compatibility: if --token points to a readable file, treat it as credentials file.
+  TOKEN_FILE="$TOKEN"
+  TOKEN=""
+  TOKEN_SET_BY_ARG="0"
   load_credentials_file "$TOKEN_FILE"
 fi
 

@@ -422,11 +422,12 @@ if [[ -n "$TOKEN_FILE" ]]; then
 fi
 
 if [[ -n "$REPO_REGEX" ]]; then
-  if [[ ! "" =~ $REPO_REGEX ]]; then
-    regex_status=$?
-    if [[ "$regex_status" -eq 2 ]]; then
-      err "Invalid regular expression for --repo-regex: ${REPO_REGEX}"
-    fi
+  set +e
+  printf '' | grep -E "$REPO_REGEX" >/dev/null 2>&1
+  regex_status=$?
+  set -e
+  if [[ "$regex_status" -eq 2 ]]; then
+    err "Invalid regular expression for --repo-regex: ${REPO_REGEX}"
   fi
 fi
 

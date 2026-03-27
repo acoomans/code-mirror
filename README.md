@@ -20,6 +20,7 @@ For GOG downloads, it supports:
 - downloading game files using authenticated browser cookies
 - regex filtering by game slug
 - dry-run mode
+- optional preflight authentication check (`--preflight-auth`)
 - continue-on-error behavior and end-of-run summary counters
 
 Provider-specific notes:
@@ -60,6 +61,7 @@ GOG download options:
 - `-d, --dest DIR` destination directory for downloaded files (default: `./gog-downloads`)
 - `-r, --game-regex REGEX` only process games whose slug matches regex
 - `-n, --dry-run` show planned downloads without downloading files
+- `--preflight-auth` run an auth validation check before listing/downloading
 - `-h, --help` show help
 
 ## Recommended Auth Setup
@@ -153,6 +155,12 @@ Dry-run GOG download with regex filter:
 ./backup-gog-games.sh --cookies .secrets/gog-cookies.txt --dest "/volume1/backups/gog-games" --game-regex '^(cyberpunk-2077)$' --dry-run
 ```
 
+Run with explicit auth preflight check:
+
+```bash
+./backup-gog-games.sh --cookies .secrets/gog-cookies.txt --dest "/volume1/backups/gog-games" --preflight-auth
+```
+
 ## Behavior Notes
 
 - Existing mirrors are updated with prune.
@@ -161,6 +169,7 @@ Dry-run GOG download with regex filter:
 - After cloning with a token, the script resets origin URL to a token-free URL.
 - If one repository fails, the script continues with the next one.
 - The script exits non-zero if any repositories failed.
+- The GOG script exits with code `40` when cookies appear expired/invalid.
 
 ## Scheduling (NAS / Cron)
 

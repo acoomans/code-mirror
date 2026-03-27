@@ -6,13 +6,14 @@ usage() {
 Download owned GOG game files from GOG servers.
 
 Usage:
-  backup-gog-games.sh --cookies FILE [--dest DIR] [--game-regex REGEX] [--dry-run]
+  backup-gog-games.sh --cookies FILE [--dest DIR] [--game-regex REGEX] [--dry-run] [--preflight-auth]
 
 Options:
   -c, --cookies FILE       Netscape-format cookies file for gog.com (required)
   -d, --dest DIR           Destination directory for downloads (default: ./gog-downloads)
   -r, --game-regex REGEX   Only process games whose slug matches REGEX
   -n, --dry-run            Print planned downloads without downloading files
+      --preflight-auth     Validate cookie auth before listing/downloading games
   -h, --help               Show this help
 
 Notes:
@@ -26,6 +27,14 @@ EOF
 err() {
   echo "Error: $*" >&2
   exit 1
+}
+
+AUTH_ERROR_EXIT_CODE=40
+
+print_relogin_hint() {
+  echo "Authentication appears expired or invalid." >&2
+  echo "Refresh your gog.com cookies file and retry." >&2
+  echo "Tip: log in at https://www.gog.com/account and export an updated Netscape cookies file." >&2
 }
 
 require_cmd() {
@@ -59,10 +68,43 @@ validate_regex() {
 http_get() {
   local url="$1"
   if [[ "$HTTP_CLIENT" == "curl" ]]; then
-    curl -fsSL --cookie "$COOKIES_FILE" --cookie-jar "$COOKIE_JAR" "$url"
+    curl -sSL --cookie "$COOKIES_FILE" --cookie-jar "$COOKIE_JAR" "$url"
   else
     wget -qO- --load-cookies "$COOKIES_FILE" --save-cookies "$COOKIE_JAR" --keep-session-cookies "$url"
   fi
+}
+
+looks_like_login_response() {
+  local payload="$1"
+
+  [[ "$payload" == *"<html"* ]] && return 0
+  [[ "$payload" == *"auth.gog.com"* ]] && return 0
+  [[ "$payload" == *"on_login_success"* ]] && return 0
+  [[ "$payload" == *"sign in"* ]] && return 0
+  [[ "$payload" == *"login"*"password"* ]] && return 0
+
+  return 1
+}
+
+run_preflight_auth_check() {
+  local data
+  data="$(http_get "https://www.gog.com/account/getFilteredProducts?mediaType=1&sortBy=title&page=1")" || {
+    echo "Failed to reach GOG products endpoint during preflight auth check." >&2
+    return 1
+  }
+
+  if [[ "$data" == *'"products"'* ]]; then
+    echo "Preflight auth check passed"
+    return 0
+  fi
+
+  if looks_like_login_response "$data"; then
+    echo "Preflight auth check failed: login response received instead of products." >&2
+    return "$AUTH_ERROR_EXIT_CODE"
+  fi
+
+  echo "Preflight auth check failed: unexpected response from GOG products endpoint." >&2
+  return 1
 }
 
 extract_json_number_field() {
@@ -129,8 +171,11 @@ list_products() {
     }
 
     if [[ "$data" != *'"products"'* ]]; then
+      if looks_like_login_response "$data"; then
+        echo "GOG API returned a login/auth response on page ${page}." >&2
+        return "$AUTH_ERROR_EXIT_CODE"
+      fi
       echo "GOG API returned a non-product response on page ${page}." >&2
-      echo "This is often caused by expired or invalid cookies." >&2
       return 1
     fi
 
@@ -192,6 +237,11 @@ process_game() {
     return 1
   }
 
+  if looks_like_login_response "$details"; then
+    echo "Received login/auth response while fetching details for ${game_slug}." >&2
+    return "$AUTH_ERROR_EXIT_CODE"
+  fi
+
   links="$(json_downlinks "$details")"
   if [[ -z "$links" ]]; then
     echo "Skipping ${game_slug}: no downloadable files in account response"
@@ -234,6 +284,7 @@ COOKIES_FILE=""
 DEST_DIR="./gog-downloads"
 GAME_REGEX=""
 DRY_RUN="0"
+PREFLIGHT_AUTH="0"
 HTTP_CLIENT=""
 COOKIE_JAR=""
 
@@ -256,6 +307,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -n|--dry-run)
       DRY_RUN="1"
+      shift
+      ;;
+    --preflight-auth)
+      PREFLIGHT_AUTH="1"
       shift
       ;;
     -h|--help)
@@ -285,8 +340,31 @@ trap 'rm -f "$COOKIE_JAR"' EXIT
 
 mkdir -p "$DEST_DIR"
 
+if [[ "$PREFLIGHT_AUTH" == "1" ]]; then
+  echo "Running preflight auth check..."
+  set +e
+  run_preflight_auth_check
+  preflight_status=$?
+  set -e
+  if [[ "$preflight_status" -eq "$AUTH_ERROR_EXIT_CODE" ]]; then
+    print_relogin_hint
+    exit "$AUTH_ERROR_EXIT_CODE"
+  elif [[ "$preflight_status" -ne 0 ]]; then
+    err "Preflight auth check failed"
+  fi
+fi
+
 echo "Listing owned GOG games..."
-game_rows="$(list_products)" || err "Failed to list owned games"
+set +e
+game_rows="$(list_products)"
+list_status=$?
+set -e
+if [[ "$list_status" -eq "$AUTH_ERROR_EXIT_CODE" ]]; then
+  print_relogin_hint
+  exit "$AUTH_ERROR_EXIT_CODE"
+elif [[ "$list_status" -ne 0 ]]; then
+  err "Failed to list owned games"
+fi
 
 if [[ -z "$game_rows" ]]; then
   echo "No owned games found"
@@ -334,7 +412,15 @@ for row in "${games[@]}"; do
   game_id="${row%%$'\t'*}"
   game_slug="${row##*$'\t'}"
 
-  if ! process_game "$game_id" "$game_slug"; then
+  set +e
+  process_game "$game_id" "$game_slug"
+  process_status=$?
+  set -e
+  if [[ "$process_status" -eq "$AUTH_ERROR_EXIT_CODE" ]]; then
+    cd "$START_DIR"
+    print_relogin_hint
+    exit "$AUTH_ERROR_EXIT_CODE"
+  elif [[ "$process_status" -ne 0 ]]; then
     cd "$START_DIR"
     ((failed_count+=1))
     echo "Failed ${game_slug}; continuing"

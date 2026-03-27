@@ -131,9 +131,12 @@ output_file_gog="$work_dir/output-gog.txt"
     --cookies "$work_dir/gog-cookies.txt" \
     --dest "$work_dir/gog-dest" \
     --game-regex '^(cyberpunk-2077)$' \
+    --preflight-auth \
     --dry-run
 ) >"$output_file_gog" 2>&1
 
+grep -q "Running preflight auth check" "$output_file_gog"
+grep -q "Preflight auth check passed" "$output_file_gog"
 grep -q "Listing owned GOG games" "$output_file_gog"
 grep -q "Found 2 candidate games" "$output_file_gog"
 grep -q "Skipping non-matching game baldurs-gate-3" "$output_file_gog"

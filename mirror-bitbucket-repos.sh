@@ -3,28 +3,28 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Mirror all repositories for a GitHub account.
+Mirror all repositories for a Bitbucket workspace.
 
 Usage:
-  mirror-github-repos.sh --account ACCOUNT [--dest DIR] [--token TOKEN] [--token-file FILE] [--dry-run] [--skip-forks] [--repo-regex REGEX] [--with-lfs]
+  mirror-bitbucket-repos.sh --account WORKSPACE [--dest DIR] [--token TOKEN] [--username USERNAME_OR_EMAIL] [--token-file FILE] [--dry-run] [--skip-forks] [--repo-regex REGEX] [--with-lfs]
 
 Options:
-  -a, --account ACCOUNT   GitHub user or organization name (required)
-  -d, --dest DIR          Destination directory for mirrored repos (default: ./mirrors)
-  -t, --token TOKEN       GitHub token (or set GITHUB_TOKEN env var)
-  -T, --token-file FILE   Read .env-style credentials file (ACCOUNT/GITHUB_TOKEN)
-  -n, --dry-run           Print planned actions without cloning/fetching
-  -s, --skip-forks        Skip repositories where "fork" is true
-  -r, --repo-regex REGEX  Only process repositories whose name matches REGEX
-  -l, --with-lfs          Fetch Git LFS objects with --all after mirror/update
-  -h, --help              Show this help
+  -a, --account WORKSPACE  Bitbucket workspace slug (required)
+  -d, --dest DIR           Destination directory for mirrored repos (default: ./mirrors)
+  -t, --token TOKEN        Bitbucket API token (or set BITBUCKET_TOKEN)
+  -u, --username USERNAME  Atlassian account email for API auth
+  -T, --token-file FILE    Read .env-style credentials file
+  -n, --dry-run            Print planned actions without cloning/fetching
+  -s, --skip-forks         Skip repositories that are forks (have a parent)
+  -r, --repo-regex REGEX   Only process repositories whose name matches REGEX
+  -l, --with-lfs           Fetch Git LFS objects with --all after mirror/update
+  -h, --help               Show this help
 
 Notes:
   - Existing mirrors are updated with fetch --prune.
   - New repositories are mirrored with git clone --mirror.
   - LFS objects are fetched only when --with-lfs is enabled.
-  - Credential file supports ACCOUNT/GITHUB_ACCOUNT and TOKEN/GITHUB_TOKEN.
-  - For private repositories, pass a token with appropriate permissions.
+  - Credential file supports WORKSPACE/ACCOUNT, BITBUCKET_TOKEN/TOKEN, BITBUCKET_EMAIL/BITBUCKET_USERNAME/USERNAME.
   - Uses curl when available, otherwise falls back to wget.
 EOF
 }
@@ -84,129 +84,186 @@ extract_json_string_field() {
 json_repo_name_and_fork() {
   local json="$1"
 
-  local names forks
-  names="$(printf '%s\n' "$json" | awk '
-    {
-      line = $0
-      while (match(line, /"full_name"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
-        token = substr(line, RSTART, RLENGTH)
-        sub(/^"full_name"[[:space:]]*:[[:space:]]*"/, "", token)
-        sub(/"$/, "", token)
-        print token
-        line = substr(line, RSTART + RLENGTH)
+  printf '%s' "$json" | tr -d '\n\r' | awk '
+    function emit_repo(obj, full_name, is_fork) {
+      full_name = ""
+      is_fork = "false"
+
+      if (match(obj, /"full_name"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+        full_name = substr(obj, RSTART, RLENGTH)
+        sub(/^"full_name"[[:space:]]*:[[:space:]]*"/, "", full_name)
+        sub(/"$/, "", full_name)
+      }
+
+      if (obj ~ /"parent"[[:space:]]*:[[:space:]]*\{/) {
+        is_fork = "true"
+      }
+
+      if (full_name != "") {
+        print full_name "\t" is_fork
       }
     }
-  ')"
 
-  forks="$(printf '%s\n' "$json" | awk '
+    BEGIN {
+      in_values = 0
+      values_level = 0
+      object_level = 0
+      in_string = 0
+      escaped = 0
+      prefix = ""
+      object = ""
+    }
+
     {
-      line = $0
-      while (match(line, /"fork"[[:space:]]*:[[:space:]]*(true|false)/)) {
-        token = substr(line, RSTART, RLENGTH)
-        sub(/^"fork"[[:space:]]*:[[:space:]]*/, "", token)
-        print token
-        line = substr(line, RSTART + RLENGTH)
+      data = $0
+      for (i = 1; i <= length(data); i++) {
+        c = substr(data, i, 1)
+
+        if (!in_values) {
+          prefix = prefix c
+          if (length(prefix) > 64) {
+            prefix = substr(prefix, length(prefix) - 63)
+          }
+
+          if (prefix ~ /"values"[[:space:]]*:[[:space:]]*\[$/) {
+            in_values = 1
+            values_level = 1
+            object_level = 0
+            object = ""
+          }
+          continue
+        }
+
+        if (in_string) {
+          if (object_level > 0) {
+            object = object c
+          }
+
+          if (escaped) {
+            escaped = 0
+          } else if (c == "\\") {
+            escaped = 1
+          } else if (c == "\"") {
+            in_string = 0
+          }
+          continue
+        }
+
+        if (c == "\"") {
+          in_string = 1
+          if (object_level > 0) {
+            object = object c
+          }
+          continue
+        }
+
+        if (c == "[") {
+          values_level++
+          continue
+        }
+
+        if (c == "]") {
+          values_level--
+          if (values_level == 0) {
+            exit
+          }
+          continue
+        }
+
+        if (c == "{") {
+          if (object_level == 0) {
+            object = ""
+          }
+          object_level++
+          object = object c
+          continue
+        }
+
+        if (c == "}") {
+          if (object_level > 0) {
+            object = object c
+            object_level--
+            if (object_level == 0) {
+              emit_repo(object)
+              object = ""
+            }
+          }
+          continue
+        }
+
+        if (object_level > 0) {
+          object = object c
+        }
       }
     }
-  ')"
-
-  if [[ -z "$names" || -z "$forks" ]]; then
-    return 0
-  fi
-
-  paste <(printf '%s\n' "$names") <(printf '%s\n' "$forks") | awk -F'\t' '
-    NF >= 2 && $1 != "" && ($2 == "true" || $2 == "false")
   '
 }
 
 http_get() {
   local url="$1"
+
   if [[ "$HTTP_CLIENT" == "curl" ]]; then
     if [[ -n "$TOKEN" ]]; then
-      curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${TOKEN}" "$url"
+      curl -fsSL -u "${AUTH_USER}:${TOKEN}" "$url"
     else
-      curl -fsSL -H "Accept: application/vnd.github+json" "$url"
+      curl -fsSL "$url"
     fi
   else
     if [[ -n "$TOKEN" ]]; then
-      wget -qO- --header="Accept: application/vnd.github+json" --header="Authorization: Bearer ${TOKEN}" "$url"
+      wget -qO- --user="$AUTH_USER" --password="$TOKEN" "$url"
     else
-      wget -qO- --header="Accept: application/vnd.github+json" "$url"
+      wget -qO- "$url"
     fi
   fi
 }
 
-get_account_type() {
-  local account="$1"
-  local data
-  data="$(http_get "https://api.github.com/users/${account}")" || return 1
-  extract_json_string_field "$data" "type"
-}
-
-get_authenticated_login() {
-  [[ -z "$TOKEN" ]] && return 0
-  local data
-  data="$(http_get "https://api.github.com/user")" || return 1
-  extract_json_string_field "$data" "login"
-}
-
 list_repos() {
   local account="$1"
-  local account_type="$2"
-  local auth_login="$3"
 
-  local page=1
-  local endpoint=""
+  local endpoint="https://api.bitbucket.org/2.0/repositories/${account}?pagelen=100"
   local page_data=""
   local rows=""
 
-  while :; do
-    if [[ -n "$TOKEN" && -n "$auth_login" && "$account" == "$auth_login" ]]; then
-      endpoint="https://api.github.com/user/repos?type=owner&per_page=100&page=${page}"
-    elif [[ "$account_type" == "Organization" ]]; then
-      endpoint="https://api.github.com/orgs/${account}/repos?type=all&per_page=100&page=${page}"
-    else
-      endpoint="https://api.github.com/users/${account}/repos?type=owner&per_page=100&page=${page}"
-    fi
-
+  while [[ -n "$endpoint" ]]; do
     page_data="$(http_get "$endpoint")" || {
-      echo "Failed to fetch repository page ${page}" >&2
+      echo "Failed to fetch repository list" >&2
       return 1
     }
 
-    local trimmed first_char
-    trimmed="${page_data#"${page_data%%[![:space:]]*}"}"
-    first_char="${trimmed:0:1}"
-    if [[ "$first_char" != "[" ]]; then
-      echo "GitHub API returned a non-repository response on page ${page}." >&2
-      echo "This is often caused by rate limiting or insufficient token permissions." >&2
+    if [[ "$page_data" != *'"values"'* ]]; then
+      echo "Bitbucket API returned a non-repository response." >&2
+      echo "This is often caused by invalid workspace or insufficient permissions." >&2
       return 1
     fi
 
     rows="$(json_repo_name_and_fork "$page_data")"
-    if [[ -z "$rows" ]]; then
-      break
+    if [[ -n "$rows" ]]; then
+      printf '%s\n' "$rows"
     fi
 
-    printf '%s\n' "$rows"
-    ((page++))
+    endpoint="$(extract_json_string_field "$page_data" "next")"
   done
 }
 
 auth_clone_url() {
   local full_name="$1"
   if [[ -n "$TOKEN" ]]; then
-    local enc_token
+    local enc_user enc_token git_auth_user
+    git_auth_user="${AUTH_USER:-x-bitbucket-api-token-auth}"
+    if [[ "$git_auth_user" == *"@"* ]]; then
+      git_auth_user="x-bitbucket-api-token-auth"
+    fi
+    enc_user="$(url_encode "$git_auth_user")"
     enc_token="$(url_encode "$TOKEN")"
-    printf 'https://x-access-token:%s@github.com/%s.git' "$enc_token" "$full_name"
+    printf 'https://%s:%s@bitbucket.org/%s.git' "$enc_user" "$enc_token" "$full_name"
   else
-    printf 'https://github.com/%s.git' "$full_name"
+    printf 'https://bitbucket.org/%s.git' "$full_name"
   fi
 }
 
 safe_clone_url() {
   local full_name="$1"
-  printf 'https://github.com/%s.git' "$full_name"
+  printf 'https://bitbucket.org/%s.git' "$full_name"
 }
 
 load_credentials_file() {
@@ -255,14 +312,19 @@ load_credentials_file() {
     fi
 
     case "$key_normalized" in
-      ACCOUNT|GITHUB_ACCOUNT)
+      ACCOUNT|WORKSPACE|BITBUCKET_WORKSPACE)
         if [[ "$ACCOUNT_SET_BY_ARG" == "0" && -z "$ACCOUNT" ]]; then
           ACCOUNT="$value"
         fi
         ;;
-      TOKEN|GITHUB_TOKEN)
+      TOKEN|BITBUCKET_TOKEN|BITBUCKET_APP_PASSWORD)
         if [[ "$TOKEN_SET_BY_ARG" == "0" && -z "$TOKEN" ]]; then
           TOKEN="$value"
+        fi
+        ;;
+      USERNAME|BITBUCKET_USERNAME|BITBUCKET_USER|EMAIL|BITBUCKET_EMAIL)
+        if [[ "$USER_SET_BY_ARG" == "0" && -z "$AUTH_USER" ]]; then
+          AUTH_USER="$value"
         fi
         ;;
       *)
@@ -325,7 +387,7 @@ clone_or_update_repo() {
       echo "Mirror failed for ${full_name}" >&2
       return 1
     fi
-    # Keep origin URL token-free on disk.
+
     if ! git -C "$repo_path" remote set-url origin "$clean_url"; then
       echo "Failed to set clean origin URL for ${full_name}" >&2
       return 1
@@ -366,7 +428,8 @@ clone_or_update_repo() {
 
 ACCOUNT=""
 DEST_DIR="./mirrors"
-TOKEN="${GITHUB_TOKEN:-}"
+TOKEN="${BITBUCKET_TOKEN:-}"
+AUTH_USER="${BITBUCKET_EMAIL:-${BITBUCKET_USERNAME:-}}"
 TOKEN_FILE=""
 DRY_RUN="0"
 SKIP_FORKS="0"
@@ -374,10 +437,11 @@ REPO_REGEX=""
 WITH_LFS="0"
 ACCOUNT_SET_BY_ARG="0"
 TOKEN_SET_BY_ARG="0"
+USER_SET_BY_ARG="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -a|--account)
+    -a|--account|--workspace)
       [[ $# -lt 2 ]] && err "Missing value for $1"
       ACCOUNT="$2"
       ACCOUNT_SET_BY_ARG="1"
@@ -392,6 +456,12 @@ while [[ $# -gt 0 ]]; do
       [[ $# -lt 2 ]] && err "Missing value for $1"
       TOKEN="$2"
       TOKEN_SET_BY_ARG="1"
+      shift 2
+      ;;
+    -u|--username)
+      [[ $# -lt 2 ]] && err "Missing value for $1"
+      AUTH_USER="$2"
+      USER_SET_BY_ARG="1"
       shift 2
       ;;
     -T|--token-file)
@@ -448,12 +518,16 @@ fi
 
 [[ -z "$ACCOUNT" ]] && {
   usage
-  err "--account is required"
+  err "--account/--workspace is required"
 }
 
 require_cmd git
 require_cmd awk
 select_http_client
+
+if [[ -n "$TOKEN" && -z "$AUTH_USER" ]]; then
+  err "Token auth requires --username (Bitbucket username or Atlassian email), or set BITBUCKET_EMAIL/BITBUCKET_USERNAME"
+fi
 
 if [[ "$WITH_LFS" == "1" ]]; then
   if ! git lfs version >/dev/null 2>&1; then
@@ -463,17 +537,8 @@ fi
 
 mkdir -p "$DEST_DIR"
 
-echo "Resolving account type for ${ACCOUNT}..."
-ACCOUNT_TYPE="$(get_account_type "$ACCOUNT")" || err "Failed to resolve account: ${ACCOUNT}"
-[[ -z "$ACCOUNT_TYPE" ]] && err "Could not detect account type for ${ACCOUNT}"
-
-auth_login=""
-if [[ -n "$TOKEN" ]]; then
-  auth_login="$(get_authenticated_login || true)"
-fi
-
-echo "Listing repositories for ${ACCOUNT} (${ACCOUNT_TYPE})..."
-repo_rows_output="$(list_repos "$ACCOUNT" "$ACCOUNT_TYPE" "$auth_login")" || err "Failed to list repositories for ${ACCOUNT}"
+echo "Listing repositories for workspace ${ACCOUNT}..."
+repo_rows_output="$(list_repos "$ACCOUNT")" || err "Failed to list repositories for ${ACCOUNT}"
 mapfile -t repo_rows <<<"$repo_rows_output"
 
 if [[ ${#repo_rows[@]} -eq 0 ]]; then
@@ -519,31 +584,30 @@ skipped_count="$filtered_skip_count"
 planned_mirror_count=0
 planned_update_count=0
 for full_name in "${repos[@]}"; do
-  if ! clone_or_update_repo "$full_name" "$DEST_DIR"; then
+  if clone_or_update_repo "$full_name" "$DEST_DIR"; then
+    case "$LAST_ACTION" in
+      mirrored)
+        ((mirrored_count+=1))
+        ;;
+      updated)
+        ((updated_count+=1))
+        ;;
+      planned_mirror)
+        ((planned_mirror_count+=1))
+        ;;
+      planned_update)
+        ((planned_update_count+=1))
+        ;;
+      skipped)
+        ((skipped_count+=1))
+        ;;
+      *)
+        ;;
+    esac
+  else
+    echo "Failed processing ${full_name}" >&2
     ((failed_count+=1))
-    echo "Failed ${full_name}; continuing"
-    continue
   fi
-
-  case "$LAST_ACTION" in
-    mirrored)
-      ((mirrored_count+=1))
-      ;;
-    updated)
-      ((updated_count+=1))
-      ;;
-    skipped)
-      ((skipped_count+=1))
-      ;;
-    planned_mirror)
-      ((planned_mirror_count+=1))
-      ;;
-    planned_update)
-      ((planned_update_count+=1))
-      ;;
-    *)
-      ;;
-  esac
 done
 
 echo "Summary:"
@@ -559,7 +623,6 @@ fi
 echo "  failed: ${failed_count}"
 
 if [[ "$failed_count" -gt 0 ]]; then
-  echo "Done with ${failed_count} failed repositories"
   exit 1
 fi
 

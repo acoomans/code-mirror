@@ -36,6 +36,12 @@ case "$url" in
   "https://api.github.com/user/repos?type=owner&per_page=100&page=2")
     printf '[]\n'
     ;;
+  "https://api.bitbucket.org/2.0/repositories/acoomans?pagelen=100")
+    printf '{"values":[{"full_name":"acoomans/ACReuseQueue","name":"ACReuseQueue"},{"full_name":"acoomans/forked","name":"forked","parent":{"full_name":"upstream/forked"}}],"next":"https://api.bitbucket.org/2.0/repositories/acoomans?page=2&pagelen=100"}\n'
+    ;;
+  "https://api.bitbucket.org/2.0/repositories/acoomans?page=2&pagelen=100")
+    printf '{"values":[]}\n'
+    ;;
   *)
     echo "mock curl: unexpected URL: $url" >&2
     exit 2
@@ -82,5 +88,26 @@ grep -q "Processing 1 repositories" "$output_file_token_flag"
 grep -q "\[dry-run\] mirror acoomans/433Utils" "$output_file_token_flag"
 grep -q "Summary:" "$output_file_token_flag"
 grep -q "failed: 0" "$output_file_token_flag"
+
+printf '\xEF\xBB\xBFWORKSPACE=acoomans\nBITBUCKET_USERNAME=dummy-user\nBITBUCKET_APP_PASSWORD=dummy-token\n' >"$work_dir/bitbucket-creds.env"
+
+output_file_bitbucket="$work_dir/output-bitbucket.txt"
+(
+  cd "$repo_root"
+  PATH="$work_dir/mockbin:$PATH" ./mirror-bitbucket-repos.sh \
+    --token-file "$work_dir/bitbucket-creds.env" \
+    --dest "$work_dir/mirrors-bb" \
+    --skip-forks \
+    --repo-regex '^(ACReuseQueue)$' \
+    --dry-run
+) >"$output_file_bitbucket" 2>&1
+
+grep -q "Listing repositories for workspace acoomans" "$output_file_bitbucket"
+grep -q "Found 2 repositories" "$output_file_bitbucket"
+grep -q "Skipping fork acoomans/forked" "$output_file_bitbucket"
+grep -q "Processing 1 repositories" "$output_file_bitbucket"
+grep -q "\[dry-run\] mirror acoomans/ACReuseQueue" "$output_file_bitbucket"
+grep -q "Summary:" "$output_file_bitbucket"
+grep -q "failed: 0" "$output_file_bitbucket"
 
 echo "smoke test OK"

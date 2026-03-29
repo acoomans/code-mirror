@@ -83,7 +83,7 @@ GitHub gist run with the same credentials file:
 
 GitHub gist token permissions:
 - Personal access token (classic): include the `gist` scope to access private gists.
-	GitHub does not provide a separate read-only gist scope for classic PATs; `gist` is a combined read/write scope.
+  GitHub does not provide a separate read-only gist scope for classic PATs; `gist` is a combined read/write scope.
 - Fine-grained PATs may return only public gists in practice (and may not expose gist-specific permissions in UI).
   If you expect secret gists, use a classic PAT with `gist` scope.
 - To include private gists, token owner must match `--account`.
@@ -159,7 +159,7 @@ Create worktree checkouts from mirrored gists:
 ```bash
 cd /path/to/mirrors-gists
 for i in *.git; do
-	git clone "$i" "${i%.git}"
+    git clone "$i" "${i%.git}"
 done
 ```
 
